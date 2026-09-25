@@ -1,13 +1,13 @@
-    !  ͨ�ñ����Fortran���ݽṹ��������  (GCLIB)
+    !  通用便捷型Fortran数据结构及函数库  (GCLIB)
     !   General and Convenient Fortran Data Structure and Function Library
     !---------------------------------------------------------------
     !
-    !       ��GJK - EPA ��ײ����㷨��
+    !       【GJK - EPA 碰撞检测算法】
     !       Gilbert-Johnson-Keerthi  -   Expanding Polytope Algorith
-    !       ( ��������-Լ��ѷ-����ϣ�㷨 - ��չ�������㷨 )
+    !       ( 吉尔伯特-约翰逊-基尔希算法 - 扩展多面体算法 )
     !       2023.5.9 - code by XIE Jihong
     !       2023.9.7 - omp optimization by XIE Jihong
-    !       ʹ�÷����� ֱ�ӵ���GJKEPA()���ɻ����ײ��Ϣ
+    !       使用方法： 直接调用GJKEPA()即可获得碰撞信息
     !---------------------------------------------------------------
     MODULE GCLIB_GJKEPA
     USE GCLIB_List, ONLY : List_Array3d, ListNode_Array3d
@@ -41,68 +41,68 @@
             nearest_points_, collision_normal_, collision_point_, penetration_depth_)
         !DEC$ ATTRIBUTES DLLEXPORT :: GJKEPA
             IMPLICIT NONE
-            INTEGER*4, INTENT(IN) :: version_ ! �汾��ǣ���ǰ����1 ��2����Ӱ�������õĺ�����
-	        REAL*8, INTENT(IN) :: TOL_FF_   ! ͨ��=1�����ֵԽ���ж�Ϊ����Ӵ���������Խ���ɡ�
-            REAL*8, INTENT(IN) :: p1_(:,:), p2_(:,:)  ! �������������͹������Ķ��㼯
-            LOGICAL*1, INTENT(OUT) :: collision_ ! �Ƿ���ײ
-            INTEGER*4, INTENT(OUT) :: colliType_ ! ��ײ���ͣ�0 - δ��ײ�� 1 - ������ײ���� �� 2 - ������ײ(��ֵ�ж�)
-            REAL*8, INTENT(OUT) :: nearest_points_(2,3)     ! ������
-            REAL*8, INTENT(OUT) :: collision_normal_(3)     ! ��ײ����
-            REAL*8, INTENT(OUT) :: collision_point_(3)      ! ��ײ��
-            REAL*8, INTENT(OUT) :: penetration_depth_       ! ��͸���
+            INTEGER*4, INTENT(IN) :: version_ ! 版本标记（当前可用1 、2，会影响后面调用的函数）
+	        REAL*8, INTENT(IN) :: TOL_FF_   ! 通常=1，这个值越大，判定为面面接触的条件就越宽松。
+            REAL*8, INTENT(IN) :: p1_(:,:), p2_(:,:)  ! 输入参数：两个凸多面体的顶点集
+            LOGICAL*1, INTENT(OUT) :: collision_ ! 是否碰撞
+            INTEGER*4, INTENT(OUT) :: colliType_ ! 碰撞类型：0 - 未碰撞； 1 - 其他碰撞类型 ； 2 - 面面碰撞(阈值判断)
+            REAL*8, INTENT(OUT) :: nearest_points_(2,3)     ! 最近点对
+            REAL*8, INTENT(OUT) :: collision_normal_(3)     ! 碰撞法向
+            REAL*8, INTENT(OUT) :: collision_point_(3)      ! 碰撞点
+            REAL*8, INTENT(OUT) :: penetration_depth_       ! 穿透深度
             !---------------------------------------------------------------
             REAL*8, SAVE :: simplex(4,3), simplex_last_1(4,3), simplex_last_2(4,3)
             !$OMP THREADPRIVATE(simplex, simplex_last_1, simplex_last_2)
-            INTEGER*4, SAVE :: i, iter                    ! simplex�еĵ���                 
-            LOGICAL*1, SAVE :: isOver                    ! ��ʾ�Ƿ�����ײ���߼�����
+            INTEGER*4, SAVE :: i, iter                    ! simplex中的点数                 
+            LOGICAL*1, SAVE :: isOver                    ! 表示是否发生碰撞的逻辑变量
             !$OMP THREADPRIVATE(i, iter, isOver)
             REAL*8, SAVE :: dir(3), O(3), V1V2_vtr(3), V2V3_vtr(3), V3V4_vtr(3), VO_vtr(3)
             !$OMP THREADPRIVATE(dir, O, V1V2_vtr, V2V3_vtr, V3V4_vtr, VO_vtr)
             
             !---------------------------------------------------------------
-            ! ��ʼ��
+            ! 初始化
             !---------------------------------------------------------------
             O = .0D0
-            collision_ = .FALSE.     ! ��ʼ����ײΪδ����
+            collision_ = .FALSE.     ! 初始化碰撞为未发生
             colliType_ = 0
-            collision_point_      = 0.D0 ! ��ײ��
-            nearest_points_       = 0.D0 ! ������
-            collision_normal_     = 0.D0 ! ��ײ����
-            penetration_depth_    = 0.D0 ! ��͸���
+            collision_point_      = 0.D0 ! 碰撞点
+            nearest_points_       = 0.D0 ! 最近点对
+            collision_normal_     = 0.D0 ! 碰撞法向
+            penetration_depth_    = 0.D0 ! 穿透深度
 
             !---------------------------------------------------------------
-            ! ������ײ��⣨���ΰ������㷨��
+            ! 粗略碰撞检测（球形包络体算法）
             !---------------------------------------------------------------
             CALL RoughCollisionDetection_SphericalEnvelope(p1_, p2_, collision_)
-            IF ( .NOT. collision_ ) RETURN ! ���������ཻ�������GJK���
+            IF ( .NOT. collision_ ) RETURN ! 若包络体相交，则进行GJK检测
             
             !---------------------------------------------------------------
-            ! ��һ��������ʼ�����塿  
+            ! 【一、构建初始单纯体】  
             !---------------------------------------------------------------
             iter = 0
             DO WHILE(.TRUE.)
                 iter = iter + 1
-                ! �����������������ôֱ�ӷ��ز���ײ
+                ! 如果迭代次数过大，那么直接返回不碰撞
                 IF ( iter > 99 ) THEN
                     collision_ = .FALSE.
                     RETURN
                 END IF
                 
                 !---------------------------------------------------------------
-                ! ��1.1 ��ʼ�������� 1  �������
+                ! 【1.1 初始迭代方向 1  假随机】
                 !CALL RANDOM_NUMBER(dir(:))
                 dir = GET_RANDOM_UNIT_VECTOR(iter)
                 
-                ! �����ʼ֧��ӳ��� 1�����������ӵ�simplex��
+                ! 计算初始支持映射点 1，并将其添加到simplex中
                 simplex(1,:) = support_mapping(p1_, p2_, dir)
                 !---------------------------------------------------------------
-                ! ��1.2 ��ʼ�������� 2 �� ����
+                ! 【1.2 初始迭代方向 2 ： 反向】
                 dir = - dir
             
-                ! �����ʼ֧��ӳ��� 2�����������ӵ�simplex��
+                ! 计算初始支持映射点 2，并将其添加到simplex中
                 simplex(2,:) = support_mapping(p1_, p2_, dir)
             
-                ! �����ʼ����֧��ӳ��㶼�غϣ���ô�ı��������ֱ�����غ�Ϊֹ
+                ! 如果初始两个支持映射点都重合，那么改变迭代方向，直到不重合为止
                 IF ( ALL( DABS( simplex(1,:) - simplex(2,:) ) < 1.D-8 ) ) THEN
                     CYCLE
                 ELSE
@@ -112,14 +112,14 @@
             END DO
             
             !---------------------------------------------------------------
-            ! ��1.3 ��ʼ�������� 3 �� �߶�ָ��ԭ�㡿
+            ! 【1.3 初始迭代方向 3 ： 线段指向原点】
             dir = VEC_PL( O, simplex(1:2,:) )
             
-            ! �����ʼ֧��ӳ��� 3�����������ӵ�simplex��
+            ! 计算初始支持映射点 3，并将其添加到simplex中
             simplex(3,:) = support_mapping(p1_, p2_, dir)
             
-            ! �����ʱ�����ӵĵ㣬��simplex��ǰ�������غϣ�˵����ԭ�㷽���Ѿ��޷�������֧��ӳ���
-            ! ��ô�ɿɷ�˹����һ��������ԭ�㣬ֱ�ӷ���δ��ײ
+            ! 如果此时新添加的点，与simplex中前两个点重合，说明往原点方向已经无法搜索到支持映射点
+            ! 那么闵可夫斯基差一定不包含原点，直接返回未碰撞
             IF ( ALL( DABS( simplex(3, :) - simplex(1, :) ) < 1.D-8 ) .OR. &
                  ALL( DABS( simplex(3, :) - simplex(2, :) ) < 1.D-8 ) ) THEN
                 collision_ = .FALSE.
@@ -127,15 +127,15 @@
             END IF
 
             !---------------------------------------------------------------
-            ! ��1.4 ��ʼ�������� 4 ��ǰ��3��ӳ��֧�ֵ���ɵ������εķ���ʸ������ָ��ԭ�����ڵ���һ�ࡿ
-            ! ȷ����ĵ�λ��ʸ
+            ! 【1.4 初始迭代方向 4 ：前面3个映射支持点组成的三角形的法向矢量，且指向原点所在的那一侧】
+            ! 确定面的单位法矢
             V1V2_vtr = simplex(2,:) - simplex(1,:)
             V2V3_vtr = simplex(3,:) - simplex(2,:)
             
             dir = UTZVEC( CROSS_PRODUCT_3D(V1V2_vtr, V2V3_vtr) )
             
-            ! ����ָ��ԭ�������   .DOT. dir 
-            ! (1) = 0 ����ԭ����3��Ƭ�ڣ�˵��ԭ�������ϣ���ô�ж���ײ������
+            ! 顶点指向原点的向量   .DOT. dir 
+            ! (1) = 0 ，且原点在3角片内，说明原点在面上，那么判定碰撞，返回
             VO_vtr = O - simplex(3,:)
             IF ( DABS(DOT_PRODUCT(VO_vtr, dir) ) < 1.D-8 ) THEN
                 IF( IS_INSIDE_PF(simplex(1:3,:), O) ) THEN
@@ -147,20 +147,20 @@
                 END IF
             END IF
             
-            ! (2) < 0 ��dir���� ; 
+            ! (2) < 0 ，dir反向 ; 
             IF ( DOT_PRODUCT(VO_vtr, dir) < .0D0) dir = - dir
             
-            ! �����ʼ֧��ӳ��� 4�����������ӵ�simplex��
+            ! 计算初始支持映射点 4，并将其添加到simplex中
             simplex(4,:) = support_mapping(p1_, p2_, dir)
             
-            ! ���������ĵ����Ǹ�֧��ӳ�����ǰ3������ͬһƽ���ϣ��򷵻ز���ײ
+            ! 如果新算出的到的那个支持映射点与前3个点在同一平面上，则返回不碰撞
             IF ( DABS( DIST_PF_SIGN( simplex(4,:), simplex(1:3,:) ) ) < 1.D-8 ) THEN
                 collision_ = .FALSE. 
                 RETURN
             END IF
             
-            ! �жϵ������Ƿ����ԭ��
-            ! �������ΰ���ԭ�㣬��ô��Ϊ������ײ
+            ! 判断单纯形是否包含原点
+            ! 若单纯形包含原点，那么认为发生碰撞
             IF ( isPointInSimplex( O, simplex ) ) THEN
                 collision_ = .TRUE. 
                 CALL EPA_solu(version_, TOL_FF_, &
@@ -170,10 +170,10 @@
             END IF
             
             !---------------------------------------------------------------
-            ! �����������嵥������ԭ�㷽�������  
+            ! 【二、四面体单纯体向原点方向迭代】  
             !---------------------------------------------------------------
-            ! ��ʼ�����ι������̽����������ʼ�жϹ���û�а���ԭ�㣬
-            ! ��ô���濪ʼʹ��������ԭ�㷽�����
+            ! 初始单纯形构建过程结束，如果初始判断过程没有包含原点，
+            ! 那么下面开始使单纯形向原点方向迭代
             !---------------------------------------------------------------
             simplex_last_1 = .0D0
             simplex_last_2 = .0D0
@@ -181,7 +181,7 @@
             iter = 0
             DO WHILE(.TRUE.)
                 
-                ! �ﵽ������������δ�ҵ�����ԭ��ĵ����Σ���ǰ�汾����δ��ײ
+                ! 达到最大迭代次数仍未找到包含原点的单纯形，当前版本返回未碰撞
                 iter = iter + 1
                 IF ( iter > 50 ) THEN
                     collision_ = .FALSE. 
@@ -189,13 +189,13 @@
                 END IF
                 
                 
-                ! ��¼��ǰ����������
+                ! 记录下前两个单纯形
                 simplex_last_2 = simplex_last_1
                 simplex_last_1 = simplex
                 simplex = update_simplex_GJK( p1_, p2_, simplex )
                 
-                ! ���������ĵ����Ǹ�֧��ӳ�����ǰ3������ͬһƽ���ϣ��򷵻ز���ײ
-                 ! ���ȱ���3�㲻����
+                ! 如果新算出的到的那个支持映射点与前3个点在同一平面上，则返回不碰撞
+                 ! 首先必须3点不共线
                 IF ( NORM2(CROSS_PRODUCT_3D( simplex(2,:) - simplex(1,:), simplex(3,:) - simplex(2,:) )) < 1.D-8 ) THEN
                     collision_ = .FALSE. 
                     RETURN
@@ -206,7 +206,7 @@
                     END IF
                 END IF
                 
-                ! ��������ΰ���ԭ�㣨������ͱ��ϣ�����ô�ж���ײ�������������������
+                ! 如果单纯形包含原点（含在面和边上），那么判定碰撞，否则继续迭代单纯形
                 IF ( isPointInSimplex(O, simplex) ) THEN
                     collision_ = .TRUE. 
                     CALL EPA_solu(version_, TOL_FF_ , &
@@ -215,7 +215,7 @@
                     RETURN
                 END IF
 
-                ! ������ֹ������ �����β��ٷ����仯�����߲��ٲ����µĵ�����
+                ! 迭代终止条件： 单纯形不再发生变化，或者不再产生新的单纯形
                 isOver = .FALSE.
 
                 DO i = 1, 4, 1
@@ -245,16 +245,16 @@
             IMPLICIT NONE
             INTEGER*4, INTENT(IN) :: version_
 	        REAL*8, INTENT(IN) :: TOL_FF_
-            REAL*8, INTENT(IN) :: p1_(:,:), p2_(:,:)        ! ͹������
-            REAL*8, INTENT(IN) :: simplex_(4,3)             ! ������ԭ��ĵ�����
-            REAL*8, INTENT(OUT) :: nearest_points_(2,3)     ! ������
-            REAL*8, INTENT(OUT) :: collision_normal_(3)     ! ��ײ����
-            REAL*8, INTENT(OUT) :: collision_point_(3)     ! ��ײ��
-            REAL*8, INTENT(OUT) :: penetration_depth_       ! ��͸���
+            REAL*8, INTENT(IN) :: p1_(:,:), p2_(:,:)        ! 凸多面体
+            REAL*8, INTENT(IN) :: simplex_(4,3)             ! 包含了原点的单纯形
+            REAL*8, INTENT(OUT) :: nearest_points_(2,3)     ! 最近点对
+            REAL*8, INTENT(OUT) :: collision_normal_(3)     ! 碰撞法向
+            REAL*8, INTENT(OUT) :: collision_point_(3)     ! 碰撞点
+            REAL*8, INTENT(OUT) :: penetration_depth_       ! 穿透深度
             INTEGER*4, INTENT(OUT) :: collision_info_
             !---------------------------------------------------------------
-            REAL*8, SAVE, ALLOCATABLE :: polytope(:,:,:)            ! ��չ������     (��ţ���ţ���XYZ)
-            REAL*8, SAVE, ALLOCATABLE :: polytope_res(:,:,:)        ! ��չ������res
+            REAL*8, SAVE, ALLOCATABLE :: polytope(:,:,:)            ! 拓展多面体     (面号，点号，点XYZ)
+            REAL*8, SAVE, ALLOCATABLE :: polytope_res(:,:,:)        ! 拓展多面体res
             REAL*8, SAVE :: pene_depth, nml_devi(3), collision_normal_new(3)
             LOGICAL*1, SAVE :: isExpa
             INTEGER*4, SAVE :: istat, iter
@@ -270,11 +270,11 @@
             nml_devi = .0D0
    
             !---------------------------------------------------------------
-            ! ��ʼ��
+            ! 初始化
             IF ( ALLOCATED(polytope) ) DEALLOCATE(polytope)
-            ALLOCATE( polytope(4,3,3), STAT = istat )     ! 4���棬ÿ����3�����㣬ÿ������3������
+            ALLOCATE( polytope(4,3,3), STAT = istat )     ! 4个面，每个面3个顶点，每个顶点3个坐标
             IF ( ALLOCATED(polytope_res) ) DEALLOCATE(polytope_res)
-            ALLOCATE( polytope_res(6,3,3), STAT = istat ) ! 6���棬ÿ����3�����㣬ÿ������3������
+            ALLOCATE( polytope_res(6,3,3), STAT = istat ) ! 6个面，每个面3个顶点，每个顶点3个坐标
             
             polytope(1,1,:) = simplex_(1,:)
             polytope(1,2,:) = simplex_(2,:)
@@ -294,7 +294,7 @@
             
             iter = 0
             DO WHILE(.TRUE.)
-                ! �ﵽ������������δ�ҵ�����ԭ��ĵ����Σ���ǰ�汾����δ��ײ
+                ! 达到最大迭代次数仍未找到包含原点的单纯形，当前版本返回未碰撞
                 iter = iter + 1
                 IF ( iter > 99 ) THEN
                     WRITE(UNIT=6, FMT="(A)") "EPA_solu() - The current version of the EPA algorithm does not support collisions in this case." ! 
@@ -302,17 +302,17 @@
                     RETURN
                 END IF
                 
-                ! ��չ�����壬��˳���õ�ǰpolytope�������dist_min��nml_devi
+                ! 拓展多面体，并顺便获得当前polytope计算出的dist_min、nml_devi
                 CALL update_expandingPolytope_EPA( p1_, p2_, polytope, isExpa, polytope_res, pene_depth, nml_devi ) 
                 
                 IF ( isExpa == .FALSE. ) THEN
-                    ! ��ֹ��������
+                    ! 终止迭代条件
                     penetration_depth_ = pene_depth
                     collision_normal_ = nml_devi
                     EXIT
                 END IF
             
-                ! Ϊ�´ε�����׼��������չ��Ķ�����������polytope��������̬�����С�������·��䣬 polytope_res����δ����״̬
+                ! 为下次迭代做准备：将拓展后的多面体结果赋给polytope，两个动态数组大小必须重新分配， polytope_res保持未分配状态
                 IF(ALLOCATED(polytope)) DEALLOCATE( polytope, STAT = istat )
                 !ALLOCATE( polytope( SIZE(polytope_res, 1), 3, 3), STAT = istat )
             
@@ -322,15 +322,15 @@
 
             END DO
             
-            ! �ҵ���ײ����nml_devi�ʹ�͸���pene_depth������������
+            ! 找到碰撞法向nml_devi和穿透深度pene_depth，计算最近点对
             nearest_points_ = get_nearest_points(p1_, p2_, collision_normal_, penetration_depth_)
             
-            ! ������ײ��
-            IF ( version_ == 1 ) THEN ! �汾1 
+            ! 返回碰撞点
+            IF ( version_ == 1 ) THEN ! 版本1 
                 collision_point_ = get_collisionPoint_01(p1_, p2_, collision_normal_)
-            ELSE IF ( version_ == 2 ) THEN ! �汾2
+            ELSE IF ( version_ == 2 ) THEN ! 版本2
                 collision_point_ = get_collisionPoint_02(p1_, p2_, collision_normal_) 
-            ELSE IF ( version_ == 3 ) THEN ! �汾3
+            ELSE IF ( version_ == 3 ) THEN ! 版本3
                 collision_point_ = get_collisionPoint_03(p1_, p2_, collision_normal_, collision_normal_new)    
                 collision_normal_ = collision_normal_new
             ELSE
@@ -339,7 +339,7 @@
                 STOP
             END IF
             
-            ! ������ײ����
+            ! 返回碰撞类型
             collision_info_ = get_info_collisionType(p1_, p2_, collision_normal_, TOL_FF_)
             
             RETURN
@@ -347,26 +347,26 @@
         
         !---------------------------------------------------------------
         !
-        ! (1) ��ײ��Ϣ
+        ! (1) 碰撞信息
         !
         !---------------------------------------------------------------
         FUNCTION get_info_collisionType(p1_, p2_, collision_normal_, TOL) RESULT(res_)
             IMPLICIT NONE
-            REAL*8, INTENT(IN) :: p1_(:,:), p2_(:,:)        ! ͹������
-            REAL*8, INTENT(IN) :: collision_normal_(3)     ! ��ײ����
-	        REAL*8, INTENT(IN) :: TOL ! ��ֵ
-            INTEGER*4 :: res_ ! ��ײ���ͣ�0 - δ��ײ�� 1 - ������ײ���� �� 2 - ������ײ(��ֵ�ж�)
+            REAL*8, INTENT(IN) :: p1_(:,:), p2_(:,:)        ! 凸多面体
+            REAL*8, INTENT(IN) :: collision_normal_(3)     ! 碰撞法向
+	        REAL*8, INTENT(IN) :: TOL ! 阈值
+            INTEGER*4 :: res_ ! 碰撞类型：0 - 未碰撞； 1 - 其他碰撞类型 ； 2 - 面面碰撞(阈值判断)
             
             INTEGER*4, SAVE :: i, C, D ! 
             REAL*8, SAVE :: max_dot_product, dot_product_vertex, dot_product_maxIndex
-            !REAL*8, PARAMETER :: TOL = 1.D0 ! ��ֵ
+            !REAL*8, PARAMETER :: TOL = 1.D0 ! 阈值
             !$OMP THREADPRIVATE(i, C, D, max_dot_product, dot_product_vertex, dot_product_maxIndex) ! 
-            ! ����������˵��һ����������ײ����ʼ��Ϊ1
+            ! 进了这里面说明一定发生了碰撞。初始化为1
             res_ = 1
             
             !---------------------------------------------------------------
-            ! ��p1��
-            ! ���ҳ�����һ��֧�ŵ㣬���ɿɷ�˹�������ֵ��
+            ! 【p1】
+            ! 先找出其中一个支撑点，（闵可夫斯基差最大值）
             dot_product_maxIndex = - HUGE(1.0D0)
             DO i = 1, SIZE(p1_, 1)
                 dot_product_vertex = DOT_PRODUCT(collision_normal_, p1_(i,:))
@@ -384,8 +384,8 @@
             END DO
             
             !---------------------------------------------------------------
-            ! ��p2��
-            ! ���ҳ�����һ��֧�ŵ㣬���ɿɷ�˹�������ֵ��
+            ! 【p2】
+            ! 先找出其中一个支撑点，（闵可夫斯基差最大值）
             dot_product_maxIndex = - HUGE(1.0D0)
             DO i = 1, SIZE(p2_, 1)
                 dot_product_vertex = DOT_PRODUCT( - collision_normal_, p2_(i,:))
@@ -394,8 +394,8 @@
                 END IF
             END DO
                 
-            ! �ٰ����е�֧�ŵ��ҳ���
-            D = 0 ! �洢p2֧�ŵ�����
+            ! 再把所有的支撑点找出来
+            D = 0 ! 存储p2支撑点数量
             DO i = 1, SIZE(p2_, 1)
                 dot_product_vertex = DOT_PRODUCT( - collision_normal_, p2_(i,:))
                 IF (dot_product_vertex  >  dot_product_maxIndex - TOL) THEN
@@ -404,9 +404,9 @@
             END DO
             
             !---------------------------------------------------------------
-            ! ������ֵ�ж��Ƿ����϶�Ϊ��Ӵ�
+            ! 按照阈值判断是否能认定为面接触
             !---------------------------------------------------------------
-            ! ���ж���ײ�����Ƿ�������ײ��
+            ! 【判断碰撞类型是否是面碰撞】
             IF ( C >= 3 .AND. D >= 3 ) res_ = 2
             
             RETURN
@@ -415,24 +415,24 @@
         
         !---------------------------------------------------------------
         !
-        ! (2) ��ײ��  1 - ����  2 - ͨ��   3 - ���ת��ר��
+        ! (2) 碰撞点  1 - 粗略  2 - 通用   3 - 物块转盘专用
         !
         !---------------------------------------------------------------
         !---------------------------------------------------------------
-        ! Ѱ����ײ�� �汾3  (p1��� - p2ת�� ר��) 
-        ! a. ��ײ��һ����ת����
-        ! b. ��ײ�����Ϊ��XOY���ϵ�ͶӰ���ұ�Ϊ��λ����
-        ! c. ��ײ��z�����Ϊ��p1�������һ��
+        ! 寻找碰撞点 版本3  (p1物块 - p2转盘 专用) 
+        ! a. 碰撞点一定在转盘上
+        ! b. 碰撞法向变为在XOY面上的投影，且变为单位向量
+        ! c. 碰撞点z坐标变为与p1物块质心一致
         FUNCTION get_collisionPoint_03(p1_, p2_, collision_normal_, collision_normal_new_) RESULT(res_)
             IMPLICIT NONE
-            REAL*8, INTENT(IN) :: p1_(:,:), p2_(:,:)        ! ͹������
-            REAL*8, INTENT(IN) :: collision_normal_(3)     ! ��ײ����
-            REAL*8, INTENT(OUT) :: collision_normal_new_(3)     ! ������ײ����
+            REAL*8, INTENT(IN) :: p1_(:,:), p2_(:,:)        ! 凸多面体
+            REAL*8, INTENT(IN) :: collision_normal_(3)     ! 碰撞法向
+            REAL*8, INTENT(OUT) :: collision_normal_new_(3)     ! 修正碰撞法向
             REAL*8 :: res_(3)
             REAL*8 :: maxDot, vertexDot
             INTEGER*4 :: i, index_support_p2 
-            !Ѱ��p2��ײ�������ǰ��֧�ŵ�
-            ! ����͹�����p2�� - dir_�����ϵ���Զ��
+            !寻找p2碰撞法向上最靠前的支撑点
+            ! 计算凸多边形p2在 - dir_方向上的最远点
             maxDot = - HUGE(1.D0)
             index_support_p2 = 0
             DO i = 1, SIZE(p2_, 1)
@@ -442,22 +442,22 @@
                     index_support_p2 = i
                 END IF
             END DO
-            res_ = p2_( index_support_p2,: ) ! a. ��ײ��һ����ת����
-            res_(3) = SUM(p1_(:,3)) / REAL(SIZE(p1_,1)) ! c. ��ײ��z�����Ϊ��p1�������һ��
+            res_ = p2_( index_support_p2,: ) ! a. 碰撞点一定在转盘上
+            res_(3) = SUM(p1_(:,3)) / REAL(SIZE(p1_,1)) ! c. 碰撞点z坐标变为与p1物块质心一致
             
             collision_normal_new_ = collision_normal_
             collision_normal_new_(3) = 0.D0
-            collision_normal_new_ = collision_normal_new_ / NORM2(collision_normal_new_) ! b. ��ײ�����Ϊ��XOY���ϵ�ͶӰ���ұ�Ϊ��λ����
+            collision_normal_new_ = collision_normal_new_ / NORM2(collision_normal_new_) ! b. 碰撞法向变为在XOY面上的投影，且变为单位向量
             RETURN
         END FUNCTION get_collisionPoint_03
         
         
         
-        ! Ѱ����ײ�� �汾2 ��ͨ�ã�
+        ! 寻找碰撞点 版本2 （通用）
         FUNCTION get_collisionPoint_02(p1_, p2_, collision_normal_) RESULT(res_)
             IMPLICIT NONE
-            REAL*8, INTENT(IN) :: p1_(:,:), p2_(:,:)        ! ͹������
-            REAL*8, INTENT(IN) :: collision_normal_(3)     ! ��ײ����
+            REAL*8, INTENT(IN) :: p1_(:,:), p2_(:,:)        ! 凸多面体
+            REAL*8, INTENT(IN) :: collision_normal_(3)     ! 碰撞法向
             REAL*8 :: res_(3)
             REAL*8, PARAMETER :: tol = 1.D-6
             TYPE(List_Array3d), SAVE :: SPT_p1, SPT_p2 ! 
@@ -481,13 +481,13 @@
                 CALL case_02(SPT_p1, res_)    
                 
             ELSE IF ( n1 >= 2 .AND. n2 == 1 ) THEN
-                CALL case_02(SPT_p2, res_)  ! ע�⴫��
+                CALL case_02(SPT_p2, res_)  ! 注意传入
                 
             ELSE IF ( n1 == 2 .AND. n2 == 2 ) THEN
                 CALL case_03(SPT_p1, SPT_p2, res_)
                 
             ELSE IF ( n1 == 2 .AND. n2 >= 3 ) THEN
-                CALL case_04(SPT_p2, SPT_p1, res_)  ! ע�⴫��
+                CALL case_04(SPT_p2, SPT_p1, res_)  ! 注意传入
                 
             ELSE IF ( n1 >= 3 .AND. n2 == 2 ) THEN
                 CALL case_04(SPT_p1, SPT_p2, res_)
@@ -508,18 +508,18 @@
             CONTAINS
                 SUBROUTINE AddAllSupports(p_, nml_, tol_, SPT_p)
                     IMPLICIT NONE
-                    REAL*8, INTENT(IN) :: p_(:,:), nml_(3), tol_  ! ͹������
+                    REAL*8, INTENT(IN) :: p_(:,:), nml_(3), tol_  ! 凸多面体
                     TYPE(List_Array3d), INTENT(OUT) :: SPT_p
                     INTEGER*4, SAVE :: i
                     REAL*8, SAVE :: dot_maxLoc, dot_now
                     !$OMP THREADPRIVATE(i, dot_maxLoc, dot_now) ! 
-                    ! ���ҳ�����һ��֧�ŵ㣬���ɿɷ�˹�������ֵ��
+                    ! 先找出其中一个支撑点，（闵可夫斯基差最大值）
                     dot_maxLoc = - HUGE(1.0D0)
                     DO i = 1, SIZE(p_, 1)
                         dot_now = DOT_PRODUCT(nml_, p_(i,:))
                         IF (dot_now > dot_maxLoc) dot_maxLoc = dot_now
                     END DO
-                    ! �ٰ����е�֧�ŵ��ҳ���
+                    ! 再把所有的支撑点找出来
                     CALL SPT_p%reset()
                     DO i = 1, SIZE(p_, 1)
                         dot_now = DOT_PRODUCT(nml_, p_(i,:))
@@ -528,7 +528,7 @@
                     RETURN
                 END SUBROUTINE AddAllSupports
         
-                SUBROUTINE case_01(SPT_p1_, SPT_p2_, colliPoin_) ! ��ײ��Ϊ�������ߵ��е�
+                SUBROUTINE case_01(SPT_p1_, SPT_p2_, colliPoin_) ! 碰撞点为两点连线的中点
                     IMPLICIT NONE
                     TYPE(List_Array3d), INTENT(IN) :: SPT_p1_, SPT_p2_ ! 
                     REAL*8, INTENT(OUT) :: colliPoin_(3)    
@@ -540,7 +540,7 @@
                     RETURN
                 END SUBROUTINE case_01
                 
-                SUBROUTINE case_02(SPT_p_, colliPoin_) ! ��ײ���� p1 ��
+                SUBROUTINE case_02(SPT_p_, colliPoin_) ! 碰撞点在 p1 上
                     IMPLICIT NONE
                     TYPE(List_Array3d), INTENT(IN) :: SPT_p_ ! 
                     REAL*8, INTENT(OUT) :: colliPoin_(3)    
@@ -551,7 +551,7 @@
                     RETURN
                 END SUBROUTINE case_02
                 
-                SUBROUTINE case_03(SPT_p1_, SPT_p2_, colliPoin_) ! ��������
+                SUBROUTINE case_03(SPT_p1_, SPT_p2_, colliPoin_) ! 垂足中心
                     IMPLICIT NONE
                     TYPE(List_Array3d), INTENT(IN) :: SPT_p1_, SPT_p2_ ! 
                     REAL*8, INTENT(OUT) :: colliPoin_(3)    
@@ -602,7 +602,7 @@
                         CASE (2)
                             CALL case_04_2(sprt1, sprt2, colliPoin_)
                         CASE (3)
-                            CALL case_04_3(sprt1, sprt2, colliPoin_) ! �����£�Ŀǰ��case_04_2ִ��ͬ���Ĳ���
+                            CALL case_04_3(sprt1, sprt2, colliPoin_) ! 待更新，目前跟case_04_2执行同样的操作
                         CASE DEFAULT
                         
                     END SELECT
@@ -669,7 +669,7 @@
                     END SUBROUTINE case_04_3
                 
                 
-                SUBROUTINE case_05(SPT_p1_, SPT_p2_, colliPoin_) ! �����Ż�����ǰ���߼�����ײ����p1�ϣ�Ϊ����sprt����ƽ��
+                SUBROUTINE case_05(SPT_p1_, SPT_p2_, colliPoin_) ! 【待优化】当前的逻辑，碰撞点在p1上，为坐标sprt坐标平均
                     IMPLICIT NONE
                     TYPE(List_Array3d), INTENT(IN) :: SPT_p1_, SPT_p2_ ! 
                     REAL*8, INTENT(OUT) :: colliPoin_(3)    
@@ -696,14 +696,14 @@
         END FUNCTION get_collisionPoint_02
 
         !---------------------------------------------------------------
-        ! Ѱ����ײ�� �汾1 �����԰棩
+        ! 寻找碰撞点 版本1 （粗略版）
         FUNCTION get_collisionPoint_01(p1_, p2_, collision_normal_) RESULT(res_)
             IMPLICIT NONE
-            REAL*8, INTENT(IN) :: p1_(:,:), p2_(:,:)        ! ͹������
-            REAL*8, INTENT(IN) :: collision_normal_(3)     ! ��ײ����
+            REAL*8, INTENT(IN) :: p1_(:,:), p2_(:,:)        ! 凸多面体
+            REAL*8, INTENT(IN) :: collision_normal_(3)     ! 碰撞法向
             REAL*8 :: res_(3)
 
-            INTEGER*4, SAVE :: index_support_p1(2), index_support_p2(2) ! ������������������֧�ŵ�����
+            INTEGER*4, SAVE :: index_support_p1(2), index_support_p2(2) ! 仅考虑能搜索到两个支撑点的情况
             INTEGER*4, SAVE :: i, istat, C, D, max_index 
             REAL*8, SAVE :: maxDot, vertexDot, maxDotIndex
             REAL*8, SAVE :: foot_points(2,3), lineDefiEP_1(2,3), lineDefiEP_2(2,3)
@@ -717,8 +717,8 @@
             
             res_ = 0.D0
             
-            !Ѱ��p1��ײ�������ǰ��2��֧�ŵ�
-            ! ����͹�����p1��dir_�����ϵ���Զ��
+            !寻找p1碰撞法向上最靠前的2个支撑点
+            ! 计算凸多边形p1在dir_方向上的最远点
             maxDot = - HUGE(1.D0)
             index_support_p1 = 0
             DO i = 1, SIZE(p1_, 1)
@@ -729,11 +729,11 @@
                     index_support_p1(1) = i
                 END IF
             END DO
-            IF( index_support_p1(2) == 0 ) index_support_p1(2) = index_support_p1(1) ! �����һ�ξ��ҵ������ֵ����ô��Ҫ������=0
+            IF( index_support_p1(2) == 0 ) index_support_p1(2) = index_support_p1(1) ! 如果第一次就找到个最大值，那么不要让索引=0
             
             
-            !Ѱ��p2��ײ�������ǰ��2��֧�ŵ�
-            ! ����͹�����p2��-dir_�����ϵ���Զ��
+            !寻找p2碰撞法向上最靠前的2个支撑点
+            ! 计算凸多边形p2在-dir_方向上的最远点
             maxDot = - HUGE(1.D0)
             index_support_p2 = 0
             DO i = 1, SIZE(p2_, 1)
@@ -744,38 +744,38 @@
                     index_support_p2(1) = i
                 END IF
             END DO
-            IF( index_support_p2(2) == 0 ) index_support_p2(2) = index_support_p2(1) ! �����һ�ξ��ҵ������ֵ����ô��Ҫ������=0
+            IF( index_support_p2(2) == 0 ) index_support_p2(2) = index_support_p2(1) ! 如果第一次就找到个最大值，那么不要让索引=0
             
             
-            !Ѱ��p2��ײ����������֧�ŵ�
+            !寻找p2碰撞法向上所有支撑点
             
             
-            ! ��case 1 ������p��ֻ�ѵ���һ��֧�ŵ㣬��ȡ�������е�Ϊ��ײ��
+            ! 【case 1 】两个p都只搜到了一个支撑点，则取两点间的中点为碰撞点
             IF ( index_support_p1(1) == index_support_p1(2) .AND. index_support_p2(1) == index_support_p2(2) ) THEN
                 res_ = ( p1_( index_support_p1(1), :) + p2_( index_support_p2(1), :) ) / 2.D0
             END IF
             
-            ! ��case 2 ��һ���ѵ��˶��֧�ŵ㣬����һ��convex����ײ������ֻ��������һ��֧�ŵ㣬��õ���Ϊ��ײ��
+            ! 【case 2 】一个搜到了多个支撑点，而另一个convex在碰撞法向上只能搜索到一个支撑点，则该点则为碰撞点
             IF ( index_support_p1(1) /= index_support_p1(2) .AND. index_support_p2(1) == index_support_p2(2) ) THEN
                 res_ = p2_( index_support_p2(1), :)
             ELSE IF (  index_support_p1(1) == index_support_p1(2) .AND. index_support_p2(1) /= index_support_p2(2) ) THEN
                 res_ = p1_( index_support_p1(1), :)
             END IF
             
-            ! ��case 3 ������convex����ײ�����϶��ѵ��˶��֧�ŵ㣬���ڸ���������϶���ײ����p1�ϣ����ݶ�����ײ��Ϊ��ײ����������֧�ŵ������ƽ����
+            ! 【case 3 】两个convex在碰撞法向上都搜到了多个支撑点，属于复杂情况，认定碰撞点在p1上，【暂定：碰撞点为碰撞法向方向所有支撑点的坐标平均】
             IF ( index_support_p1(1) /= index_support_p1(2) .AND. index_support_p2(1) /= index_support_p2(2) ) THEN
                 !---------------------------------------------------------------
-                !Ѱ��p1��ײ�������ǰ��2��֧�ŵ�
-                ! ����͹�����p1��dir_�����ϵ���Զ��
+                !寻找p1碰撞法向上最靠前的2个支撑点
+                ! 计算凸多边形p1在dir_方向上的最远点
                 maxDot = - HUGE(1.D0)
                 index_support_p1 = 0
-                C = 0 ! �洢p1֧�ŵ�����
+                C = 0 ! 存储p1支撑点数量
                 ALLOCATE( supports_for_aver( SIZE(p1_, 1), 3 ), STAT = istat )
                 supports_for_aver = 0.D0
                 
                 !---------------------------------------------------------------
-                ! ��p1��
-                ! ���ҳ�����һ��֧�ŵ㣬���ɿɷ�˹�������ֵ��
+                ! 【p1】
+                ! 先找出其中一个支撑点，（闵可夫斯基差最大值）
                 maxDotIndex = - HUGE(1.0D0)
                 max_index = 1
                 DO i = 1, SIZE(p1_, 1)
@@ -786,7 +786,7 @@
                     END IF
                 END DO
                 
-                ! �ٰ����е�֧�ŵ��ҳ���
+                ! 再把所有的支撑点找出来
                 DO i = 1, SIZE(p1_, 1)
                     vertexDot = DOT_PRODUCT(collision_normal_, p1_(i,:))
                     IF (vertexDot  >  maxDotIndex - 1.D-1) THEN
@@ -795,10 +795,10 @@
                     END IF
                 END DO
         
-                !���ҳ����ĵ�ȡ��ƽ�������Ż����˴�Ӧ������ײ����ཻ������ġ�
+                !把找出来的点取个平均【待优化：此处应该是碰撞面的相交面的形心】
                 FORALL(i = 1:3) res_(i) = SUM( supports_for_aver(1:C,i) ) / REAL(C, KIND(1.D0)) 
                 
-                ! �ͷſռ�
+                ! 释放空间
                 DEALLOCATE(supports_for_aver)
                 
             END IF
@@ -807,23 +807,23 @@
         
         !---------------------------------------------------------------
         !
-        ! (2) ������
+        ! (2) 最近点对
         !
         !---------------------------------------------------------------
         FUNCTION get_nearest_points(p1_, p2_, collision_normal_, penetration_depth_) RESULT(res_)
         IMPLICIT NONE
             REAL*8 :: res_(2,3)
-            REAL*8, INTENT(IN) :: p1_(:,:), p2_(:,:)        ! ͹������
-            REAL*8, INTENT(IN) :: collision_normal_(3)     ! ��ײ����
-            REAL*8, INTENT(IN) :: penetration_depth_       ! ��͸���
+            REAL*8, INTENT(IN) :: p1_(:,:), p2_(:,:)        ! 凸多面体
+            REAL*8, INTENT(IN) :: collision_normal_(3)     ! 碰撞法向
+            REAL*8, INTENT(IN) :: penetration_depth_       ! 穿透深度
             !---------------------------------------------------------------
             REAL*8, SAVE :: dir_(3), support(2,3)
-            INTEGER*4, SAVE :: i, max_index1, max_index2               ! ��ʱ������ѭ������������������
-            REAL*8, SAVE :: max_dot_product1, max_dot_product2, dot_product_temp  ! ��ʱ���������ֵ
+            INTEGER*4, SAVE :: i, max_index1, max_index2               ! 临时变量：循环计数器和最大点索引
+            REAL*8, SAVE :: max_dot_product1, max_dot_product2, dot_product_temp  ! 临时变量：点积值
             !$OMP THREADPRIVATE(dir_, support, i, max_index1, max_index2, max_dot_product1, max_dot_product2, dot_product_temp) ! 
             dir_ = collision_normal_
             
-            ! ����͹�����p1��dir_�����ϵ���Զ��
+            ! 计算凸多边形p1在dir_方向上的最远点
             max_dot_product1 = - HUGE(1.0D0)
             max_index1 = 1
             DO i = 1, SIZE(p1_, 1)
@@ -834,7 +834,7 @@
                 END IF
             END DO
             
-            ! ����͹�����p2��-dir_�����ϵ���Զ��
+            ! 计算凸多边形p2在-dir_方向上的最远点
             max_dot_product2 = - HUGE(1.0D0)
             max_index2 = 1
             DO i = 1, SIZE(p2_, 1)
@@ -857,16 +857,16 @@
     
         !---------------------------------------------------------------
         !
-        !  ����ԭ�㷽����չ������
+        !  向背离原点方向拓展多面体
         !  
         !---------------------------------------------------------------
         SUBROUTINE update_expandingPolytope_EPA( p1_, p2_, polytope_1_, isExpa_, polytope_2_, penetration_depth_, normDeviOrig_ ) 
             IMPLICIT NONE
-            REAL*8, INTENT(IN) :: p1_(:,:), p2_(:,:)                              ! �������������͹����εĶ��㼯
-            REAL*8, INTENT(IN) :: polytope_1_(:,:,:)                              ! ��չǰ�Ķ�����
-            LOGICAL*1, INTENT(OUT) :: isExpa_                                     ! ��������Ķ�����ĳ�湲�棬�򷵻�false
-            REAL*8, INTENT(OUT), ALLOCATABLE :: polytope_2_(:,:,:)  ! ��չ��Ķ�����
-            REAL*8, INTENT(OUT) :: penetration_depth_, normDeviOrig_(3)                  ! ���ԭ�㵽��ľ��룬����ԭ��ķ���ʸ��
+            REAL*8, INTENT(IN) :: p1_(:,:), p2_(:,:)                              ! 输入参数：两个凸多边形的顶点集
+            REAL*8, INTENT(IN) :: polytope_1_(:,:,:)                              ! 拓展前的多面体
+            LOGICAL*1, INTENT(OUT) :: isExpa_                                     ! 如果新增的顶点与某面共面，则返回false
+            REAL*8, INTENT(OUT), ALLOCATABLE :: polytope_2_(:,:,:)  ! 拓展后的多面体
+            REAL*8, INTENT(OUT) :: penetration_depth_, normDeviOrig_(3)                  ! 最短原点到面的距离，背离原点的法向矢量
             !---------------------------------------------------------------
             REAL*8, PARAMETER :: O(3) = [0.D0, 0.D0, 0.D0]
             REAL*8, SAVE :: SPMP(3), dir(3)
@@ -880,7 +880,7 @@
             !$OMP THREADPRIVATE(SPMP, dir, i, j, istat, info, n, dist1, dist2, min_loc_1, min_loc_2 ) ! 
             !$OMP THREADPRIVATE(min_val_1, min_val_2, dot, M, face_dele, temp, scatPoints, scatPoints_temp ) ! 
             !---------------------------------------------------------------
-            ! ��ʼ��
+            ! 初始化
             isExpa_ = .FALSE.
             penetration_depth_ = 0.D0
             normDeviOrig_ = 0.D0
@@ -888,38 +888,38 @@
             IF( ALLOCATED(dist1) ) DEALLOCATE(dist1)
             ALLOCATE( dist1( SIZE( polytope_1_, 1) ), STAT = istat )
             !---------------------------------------------------------------
-            ! �õ���ǰ�������չ��������浽ԭ��Ĵ�ֱ����
+            ! 得到当前传入的拓展多面体各面到原点的垂直距离
 
             DO i = 1, SIZE( polytope_1_, 1), 1
                 dist1(i) = DABS( DIST_PF_SIGN( O, polytope_1_(i, :, :) ) )
             END DO
             
-            ! �ҵ���̾����Ӧ���Ǹ���
+            ! 找到最短距离对应的那个面
             min_loc_1 = MINLOC( dist1 )
             min_val_1 = MINVAL( dist1 )
             
-            ! �����Ӧ����汳��ԭ��ĵ�λ����ʸ��
+            ! 算出对应这个面背离原点的单位法向矢量
             dir = UNINML( polytope_1_( min_loc_1(1), :, :) )
             dot = DOT_PRODUCT( polytope_1_( min_loc_1(1), 1, :) - O, dir)
-              ! ע�⣬���ԭ����������ı����ϣ���ô�������ĵ���Ϊ�жϷ���Ļ�׼�㣬����dot=0ʱ����������ķ����෴���޷�����⵽
+              ! 注意，如果原点正好在体的表面上，那么换以质心点作为判断方向的基准点，否则当dot=0时可能算出来的方向相反而无法被检测到
             IF ( DABS( dot ) < 1.D-12 ) THEN
                 FORALL(i = 1:3)  M(i) = SUM( polytope_1_(:,:,i) ) / ( SIZE(polytope_1_, 1) * SIZE(polytope_1_, 2) )
                 dot = DOT_PRODUCT( polytope_1_( min_loc_1(1), 1, :) - M, dir)
             END IF
-                ! ���dotС��0����ôdir����
+                ! 如果dot小于0，那么dir反向
             IF( dot <= - 1.D-12 ) dir = - dir
                 
             
-            ! ����ʸ��������Ѱ֧��ӳ���
+            ! 朝该矢量方向搜寻支撑映射点
             SPMP = support_mapping(p1_, p2_, dir)
             
             
             !---------------------------------------------------------------
-            ! ������ -> ɢ��
+            ! 网格组 -> 散点
             IF( ALLOCATED(scatPoints) ) DEALLOCATE(scatPoints)
             CALL getHullMeshesVertex(polytope_1_, scatPoints, info)
             
-            ! ֧��ӳ������ӽ�ɢ���飬����ɢ����
+            ! 支撑映射点添加进散点组，更新散点组
             IF( ALLOCATED(scatPoints_temp) ) DEALLOCATE(scatPoints_temp)
             scatPoints_temp = scatPoints
             IF( ALLOCATED(scatPoints) ) DEALLOCATE(scatPoints)
@@ -931,10 +931,10 @@
             
             scatPoints( 1 + SIZE(scatPoints_temp, 1), :) = SPMP(:)
             
-            !! ���dist == 0 ��ô˵��ԭ�������ϣ��޷��ж���ײ����ָ����һ�࣬��ʱ��������������һ��֧�ŵ����ɢ����
+            !! 如果dist == 0 那么说明原点在面上，无法判断碰撞法向指向哪一侧，此时往反方向再搜索一个支撑点加入散点组
             IF ( DABS(min_val_1) < 1.D-12 ) THEN
                 SPMP = support_mapping(p1_, p2_, - dir)
-                ! ֧��ӳ������ӽ�ɢ���飬����ɢ����
+                ! 支撑映射点添加进散点组，更新散点组
                 IF( ALLOCATED(scatPoints_temp) ) DEALLOCATE(scatPoints_temp)
                 scatPoints_temp = scatPoints
                 IF( ALLOCATED(scatPoints) ) DEALLOCATE(scatPoints)
@@ -945,44 +945,44 @@
             
             
 
-            ! ����͹������
+            ! 划分凸包网格
             IF( ALLOCATED(polytope_2_) ) DEALLOCATE(polytope_2_)
             CALL QuickHull(scatPoints, polytope_2_, info)
 
             
             
             !---------------------------------------------------------------
-            ! �õ���չ��Ķ�������浽ԭ��Ĵ�ֱ����
+            ! 得到拓展后的多面体各面到原点的垂直距离
             IF( ALLOCATED(dist2) ) DEALLOCATE(dist2)
             ALLOCATE( dist2( SIZE( polytope_2_, 1) ), STAT = istat )
             DO i = 1, SIZE( polytope_2_, 1), 1
                 dist2(i) = DABS( DIST_PF_SIGN( O, polytope_2_(i, :, :) ) )
             END DO
             
-            ! �ҵ���̾����Ӧ���Ǹ���
+            ! 找到最短距离对应的那个面
             min_loc_2 = MINLOC( dist2 )
             min_val_2 = MINVAL( dist2 )
             
-            ! �����Ӧ����汳��ԭ��ĵ�λ����ʸ��
+            ! 算出对应这个面背离原点的单位法向矢量
             dir = UNINML( polytope_2_( min_loc_2(1), :, :) )
             dot = DOT_PRODUCT( polytope_2_( min_loc_2(1), 1, :) - O, dir)
             IF( dot < 0.D0 ) dir = - dir
             
-            ! �ж��Ƿ�����չ.(ע�⣺�������Ҫ����ʽ����������ײ�����ɿɷ�˹�������ĵ���ֹͣ��������ĵ�)
+            ! 判定是否还在拓展.(注意：如果后续要对隐式定义的球等碰撞体求闵可夫斯基差，这里的迭代停止条件必须改掉)
             IF ( (SIZE(dist1, 1) == SIZE(dist2, 1)) ) THEN
                 n = SIZE(dist1, 1)
-                ! ��dist1��dist2ð������
+                ! 对dist1和dist2冒泡排序
                 DO i = 1, n - 1
                     DO j = 1, n - i
                         IF (dist1(j) > dist1(j + 1)) THEN
-                            ! ����Ԫ��
+                            ! 交换元素
                             temp = dist1(j)
                             dist1(j) = dist1(j + 1)
                             dist1(j + 1) = temp
                         END IF
                         
                         IF (dist2(j) > dist2(j + 1)) THEN
-                            ! ����Ԫ��
+                            ! 交换元素
                             temp = dist2(j)
                             dist2(j) = dist2(j + 1)
                             dist2(j + 1) = temp
@@ -990,31 +990,31 @@
                     END DO
                 END DO
                 
-                ! �жϴ洢�������������������Ƿ�δ�ڱ仯
+                ! 判断存储距离的数组里面的数据是否未在变化
                 IF ( ALL( DABS(dist1 - dist2) < 1.D-8) ) THEN
-                    isExpa_ = .FALSE. ! �����ⲿ���Ѿ���������չ�ˣ���ǰ�Ľ�����Ⱦ��Ƿ������ߵ���С����
-                    ! ��������
+                    isExpa_ = .FALSE. ! 告诉外部，已经不能再拓展了，当前的进入深度就是分离两者的最小距离
+                    ! 传出参数
                     penetration_depth_ = min_val_2
                     normDeviOrig_ = dir
                 ELSE
-                    isExpa_ = .TRUE.  ! �����ⲿ�����ܼ�����չ�����Լ�������
+                    isExpa_ = .TRUE.  ! 告诉外部，还能继续拓展，可以继续迭代
                     penetration_depth_ = 0.D0
                     normDeviOrig_ = 0.D0
                 END IF
                 
-            ELSE IF ( (SIZE(dist1, 1) > SIZE(dist2, 1)) ) THEN ! ˵��QuickHull�̵���һ���ر𿿽����ϵ㣬ֱ�ӷ���
-                isExpa_ = .FALSE. ! �����ⲿ���Ѿ���������չ�ˣ���ǰ�Ľ�����Ⱦ��Ƿ������ߵ���С����
-                ! ��������
+            ELSE IF ( (SIZE(dist1, 1) > SIZE(dist2, 1)) ) THEN ! 说明QuickHull吞掉了一个特别靠近面上点，直接返回
+                isExpa_ = .FALSE. ! 告诉外部，已经不能再拓展了，当前的进入深度就是分离两者的最小距离
+                ! 传出参数
                 penetration_depth_ = min_val_2
                 normDeviOrig_ = dir
 
             ELSE
-                isExpa_ = .TRUE.  ! �����ⲿ�����ܼ�����չ�����Լ�������
+                isExpa_ = .TRUE.  ! 告诉外部，还能继续拓展，可以继续迭代
                 penetration_depth_ = 0.D0
                 normDeviOrig_ = 0.D0
             END IF
 
-            ! �ͷ��ڴ�
+            ! 释放内存
             IF(ALLOCATED(dist1)) DEALLOCATE( dist1 )
             IF(ALLOCATED(dist2)) DEALLOCATE( dist2 )
             
@@ -1024,17 +1024,17 @@
         
         !---------------------------------------------------------------
         !
-        ! ����֧��ӳ��㣨�ɿɷ�˹���
+        ! 计算支撑映射点（闵可夫斯基差）
         !
         !---------------------------------------------------------------
         FUNCTION support_mapping(p1_, p2_, dir_) RESULT(res_)
             IMPLICIT NONE
-            REAL(8), INTENT(IN) :: p1_(:,:), p2_(:,:), dir_(3)  ! �������������͹����εĶ��㼯����������
-            REAL(8) :: res_(3)                                 ! ������������õ���֧��ӳ���
-            INTEGER, SAVE :: i, maxIndex1, maxIndex2               ! ��ʱ������ѭ������������������
-            REAL(8), SAVE :: maxDot1, maxDot2, tempDot  ! ��ʱ���������ֵ
+            REAL(8), INTENT(IN) :: p1_(:,:), p2_(:,:), dir_(3)  ! 输入参数：两个凸多边形的顶点集和搜索方向
+            REAL(8) :: res_(3)                                 ! 输出结果：计算得到的支持映射点
+            INTEGER, SAVE :: i, maxIndex1, maxIndex2               ! 临时变量：循环计数器和最大点索引
+            REAL(8), SAVE :: maxDot1, maxDot2, tempDot  ! 临时变量：点积值
             !$OMP THREADPRIVATE(i, maxIndex1, maxIndex2, maxDot1, maxDot2, tempDot ) ! 
-            ! ����͹�����p1��dir_�����ϵ���Զ��
+            ! 计算凸多边形p1在dir_方向上的最远点
             maxDot1 = - HUGE(1.0D0)
             maxIndex1 = 1
             DO i = 1, SIZE(p1_, 1)
@@ -1045,7 +1045,7 @@
                 END IF
             END DO
             
-            ! ����͹�����p2��-dir_�����ϵ���Զ��
+            ! 计算凸多边形p2在-dir_方向上的最远点
             maxDot2 = - HUGE(1.0D0)
             maxIndex2 = 1
             DO i = 1, SIZE(p2_, 1)
@@ -1056,7 +1056,7 @@
                 END IF
             END DO
             
-            ! ����֧��ӳ���
+            ! 计算支持映射点
             res_ = p1_(maxIndex1,:) - p2_(maxIndex2,:)
 
         END FUNCTION support_mapping
@@ -1064,31 +1064,31 @@
         
         !---------------------------------------------------------------
         !
-        !  ��ԭ�㷽����µ����Σ������壩�����µ��Ǹ�����simplex_(4,:)������3�������ĵ���simplex_(1:3,:)
+        !  向原点方向更新单纯形（四面体），更新的那个点是simplex_(4,:)，其他3个保留的点是simplex_(1:3,:)
         !
         !---------------------------------------------------------------
         FUNCTION update_simplex_GJK( p1_, p2_, simplex_ ) RESULT(res_)
             IMPLICIT NONE
-            REAL*8, INTENT(IN) :: p1_(:,:), p2_(:,:)  ! �������������͹����εĶ��㼯
+            REAL*8, INTENT(IN) :: p1_(:,:), p2_(:,:)  ! 输入参数：两个凸多边形的顶点集
             REAL*8, INTENT(IN) :: simplex_(4,3)  ! 
-            REAL*8 :: res_(4,3)     ! ������������º�ĵ�����
-            REAL*8 :: dir(3)                     ! ����
-            REAL*8 :: M(3)                     ! �����ε�����ƽ��
-            REAL*8 :: MO(3)                     ! �����ε�����ƽ�� -> ԭ��
-            REAL*8 :: O(3) !ԭ��
-            REAL*8 :: AB(3), BC(3), nml(4,3)  ! ��ʱ�����������ͷ�����
+            REAL*8 :: res_(4,3)     ! 输出参数：更新后的单纯形
+            REAL*8 :: dir(3)                     ! 方向
+            REAL*8 :: M(3)                     ! 单纯形的坐标平均
+            REAL*8 :: MO(3)                     ! 单纯形的坐标平均 -> 原点
+            REAL*8 :: O(3) !原点
+            REAL*8 :: AB(3), BC(3), nml(4,3)  ! 临时变量：向量和法向量
             REAL*8 :: dist_with_sign_total(4)
             REAL*8 :: SM(3)
             INTEGER*4 :: i ! 
             INTEGER*4 :: max_location(1)
             !---------------------------------------------------------------
-            ! �����ε�����ƽ���㣬�����б���
+            ! 单纯形的坐标平均点，用于判别方向
             FORALL(i = 1:3) M(i) = SUM( simplex_(:,i) ) / 4.D0            
             MO = - M
             O = [0.D0, 0.D0, 0.D0]
             
-            ! ����������4���泯��ĵ�λ��ʸ������->ԭ��ʸ���ĵ��
-            !�泯��ķ�ʸ
+            ! 计算四面体4个面朝外的单位法矢与质心->原点矢量的点积
+            !面朝外的法矢
             ! face 1
             AB = simplex_(1,:) - simplex_(3,:)
             BC = simplex_(3,:) - simplex_(4,:)
@@ -1117,16 +1117,16 @@
             IF ( DOT_PRODUCT( nml(4,:), simplex_(2,:) - M ) < .0D0 ) nml(4,:) = - nml(4,:)
             dist_with_sign_total(4) = DOT_PRODUCT( - nml(4,:), simplex_(2,:) - O  )
             
-            ! �ҳ�������ԭ����Ǹ���
+            ! 找出最面向原点的那个面
             max_location = MAXLOC( dist_with_sign_total )
             
-            ! �жϳ���һ����������
+            ! 判断出下一个搜索方向
             dir = nml( max_location(1), :)
             
-            ! ��һ��֧��ӳ���
+            ! 下一个支撑映射点
             SM = support_mapping(p1_, p2_, dir)
             
-            ! ���ص�����
+            ! 返回单纯形
             SELECT CASE( max_location(1) )
               CASE (1)
                 res_(1,:) = simplex_(1,:)
@@ -1159,29 +1159,29 @@
         
         !---------------------------------------------------------------
         !
-        ! �����������ײ���
+        ! 包络体粗略碰撞检测
         !
         !---------------------------------------------------------------
         SUBROUTINE RoughCollisionDetection_SphericalEnvelope(p1_, p2_, isColl_)
             IMPLICIT NONE
-            REAL*8, INTENT(IN) :: p1_(:,:), p2_(:,:)  ! �������������͹����εĶ��㼯
-            LOGICAL*1, INTENT(OUT) :: isColl_ ! �Ƿ���ײ
+            REAL*8, INTENT(IN) :: p1_(:,:), p2_(:,:)  ! 输入参数：两个凸多边形的顶点集
+            LOGICAL*1, INTENT(OUT) :: isColl_ ! 是否碰撞
             REAL*8, SAVE :: mp1(3), mp2(3), r1, r2
             REAL*8 :: dist1(SIZE(p1_,1)), dist2(SIZE(p2_,1))
             INTEGER*4, SAVE :: i ! 
             REAL*8, PARAMETER :: TOL = 1.D0
             !$OMP THREADPRIVATE(mp1, mp2, r1, r2, i) ! 
-            ! Ѱ������ƽ����
+            ! 寻找坐标平均点
             FORALL (i = 1:3) mp1(i) = SUM( p1_(:,i) ) / SIZE(p1_, 1)
             FORALL (i = 1:3) mp2(i) = SUM( p2_(:,i) ) / SIZE(p2_, 1)
             
-            ! Ѱ������뾶
+            ! 寻找球体半径
             FORALL(i = 1:SIZE(p1_,1)) dist1(i) = NORM2(p1_(i,:) - mp1(:))
             r1 = MAXVAL( dist1 )
             FORALL(i = 1:SIZE(p2_,1)) dist2(i) = NORM2(p2_(i,:) - mp2(:))
             r2 = MAXVAL( dist2 )
             
-            ! �ж������Ƿ��ཻ
+            ! 判断球体是否相交
             isColl_ = MERGE(.TRUE., .FALSE., NORM2(mp1 - mp2) <= r1 + r2 + TOL)
             
             RETURN
@@ -1197,7 +1197,7 @@
         !_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/_/
         !---------------------------------------------------------------
         !
-        ! 3d�������
+        ! 3d向量叉乘
         PURE FUNCTION CROSS_PRODUCT_3D(A_, B_) RESULT(res_)
             IMPLICIT NONE
             REAL*8, INTENT(IN) :: A_(3), B_(3)
@@ -1213,25 +1213,25 @@
         
         !---------------------------------------------------------------
         !
-        ! �жϵ��Ƿ��ڵ������ڲ�
+        ! 判断点是否在单纯形内部
         FUNCTION isPointInSimplex(p_, simplex_) RESULT(res_)
             IMPLICIT NONE
             REAL*8, INTENT(IN) :: p_(3)
             REAL*8, INTENT(IN) :: simplex_(4,3)
-            LOGICAL*1 :: res_ ! �������ʾԭ���Ƿ��ڵ������ڲ����߼�����
+            LOGICAL*1 :: res_ ! 结果：表示原点是否在单纯形内部的逻辑变量
             LOGICAL*1 :: is ! 
-            REAL*8 :: M(3)                     ! �����ε�����ƽ��
-            REAL*8 :: MO(3)                     ! �����ε�����ƽ�� -> ԭ��
+            REAL*8 :: M(3)                     ! 单纯形的坐标平均
+            REAL*8 :: MO(3)                     ! 单纯形的坐标平均 -> 原点
             REAL*8 :: AB(3), BC(3), dist(4), nml(4,3), vertexOnPlane(3,3)
             INTEGER*4 :: i, j ! 
             INTEGER*4, PARAMETER :: idFc(4, 3) = [1, 1, 1, 2, &
                                                   3, 2, 2 ,3, &
-                                                  4, 4, 3, 4] ! ��������
+                                                  4, 4, 3, 4] ! 面编号索引
             !---------------------------------------------------------------
-            ! ��SITU 1���������ڵ����
+            ! 【SITU 1】点在体内的情况
             FORALL(i = 1:3) M(i) = SUM( simplex_(:,i) ) / 4.D0      
 
-            ! ����������4���泯��ĵ�λ��ʸ
+            ! 计算四面体4个面朝外的单位法矢
             ! face1 : [1 3 4],   face2 :[1 2 4]  face3 : [1 2 3]  face4 : [2 3 4]
             DO i = 1, 4, 1 
                 AB = simplex_(idFc(i, 1), :) - simplex_(idFc(i, 2), :)
@@ -1240,15 +1240,15 @@
                 IF ( DOT_PRODUCT( nml(i,:), simplex_(i,:) - M  ) < .0D0 ) nml(i,:) = - nml(i,:)
             END DO
             
-            ! �����p_��������ľ���
+            ! 计算点p_到各个面的距离
             FORALL( i = 1:4) dist(i) = DOT_PRODUCT(simplex_(i,:) - p_, nml(i,:))
             
-            ! ��SITU 2������������ϵ����
+            ! 【SITU 2】点在体的面上的情况
             DO i = 1, 4, 1
                 IF ( DABS(dist(i) ) < 1.D-8 ) THEN
-                    ! ��ȡ������Ƭ�ϵĶ�������
+                    ! 获取对于面片上的顶点坐标
                     FORALL(j = 1:3) vertexOnPlane(j, :) = simplex_(idFc(i, j), :)
-                    ! ���뺯�����ж�
+                    ! 传入函数做判断
                     is = IS_INSIDE_PF(vertexOnPlane, p_)
                     
                     IF ( is ) THEN
@@ -1267,7 +1267,7 @@
         
         !---------------------------------------------------------------
         !
-        ! ����ƽ�������ϵ��������㷨���������ڶ���α��ϣ�
+        ! 点在平面多边形上的内外检测算法（包含点在多边形边上）
         PURE FUNCTION IS_INSIDE_PF(vertexOnPlane_, arbitraryPoint_) RESULT(res_)
             IMPLICIT NONE
             LOGICAL*1 :: res_ ! 
@@ -1276,7 +1276,7 @@
             !---------------------------------------------------------------
             REAL*8 :: temp
             INTEGER*4 :: i, NNODE
-            REAL*8 :: crossProdResu( SIZE(vertexOnPlane_, 1) )    ! �洢��˽���������ţ�
+            REAL*8 :: crossProdResu( SIZE(vertexOnPlane_, 1) )    ! 存储叉乘结果（带符号）
             REAL*8 :: V( SIZE(vertexOnPlane_, 1) , 3)
             LOGICAL*1 :: zeroMask( SIZE(vertexOnPlane_, 1) )
             !---------------------------------------------------------------
@@ -1284,8 +1284,8 @@
             zeroMask = .FALSE. 
             NNODE = SIZE(vertexOnPlane_, 1)
             !---------------------------------------------------------------
-            ! ! �����  �ʵ�-�ǵ� X ������
-            !����ͶӰ�� XOYƽ�棬���һ��ƽ������
+            ! ! 叉积：  质点-角点 X 边向量
+            !将其投影到 XOY平面，变成一个平面问题
             DO i = 1, NNODE, 1
                 IF ( i == NNODE) THEN
                     crossProdResu(i) = (V(1,1) - V(i,1)) * (arbitraryPoint_(2) - V(i,2)) &
@@ -1297,18 +1297,18 @@
                                    - (V(i+1,2) - V(i,2)) * (arbitraryPoint_(1) - V(i,1))
             END DO
 
-            ! ����
+            ! 归零
             FORALL ( i = 1 : NNODE, DABS(crossProdResu(i)) < 1.0D-12 ) crossProdResu(i) = .0D0
             
-            ! Ϊ�˱��ⱻ�жϵ������ʾ�ĵ�Ͷ��XOYƽ�����ֶ�㹲�߶�����crossProdResu=0�����
-            ! ������������crossProdResu = 0 ������Ͷ��XOZƽ��������һ���ж�
+            ! 为了避免被判断的数组表示的点投到XOY平面后出现多点共线而导致crossProdResu=0的情况
+            ! 保险起见，如果crossProdResu = 0 ，将会投到XOZ平面上再做一次判断
             DO i = 1, NNODE, 1
-                IF ( crossProdResu(i) > 1.0D-15 ) THEN ! ���ַ���
+                IF ( crossProdResu(i) > 1.0D-15 ) THEN ! 出现非零
                     zeroMask(i) = .TRUE.
                 END IF
             END DO
-            IF ( ANY(zeroMask) == .FALSE. ) THEN !ȫΪ0
-                !����ͶӰ�� XOZƽ�棬���һ��ƽ������
+            IF ( ANY(zeroMask) == .FALSE. ) THEN !全为0
+                !将其投影到 XOZ平面，变成一个平面问题
                 DO i = 1, NNODE, 1
                     IF ( i == NNODE) THEN
                         crossProdResu(i) = (V(1,1) - V(i,1)) * (arbitraryPoint_(3) - V(i,3)) &
@@ -1322,10 +1322,10 @@
             END IF
             
             
-            ! ��������ÿһ��Ԫ�ض����һ��Ԫ����ˣ� �����ָ��ģ�˵�����ֲ�ͬ��
+            ! 把数组中每一个元素都与第一个元素相乘， 若出现负的，说明出现不同号
             DO i = 1, NNODE, 1
                 temp = crossProdResu(1) * crossProdResu(i)
-                ! �����ָ��ģ�˵�����ֲ�ͬ�ţ���ô�õ㲻��ƽ����
+                ! 若出现负的，说明出现不同号，那么该点不在平面内
                 IF ( temp < .0D0 ) THEN
                     res_ = .FALSE.
                     RETURN
@@ -1339,7 +1339,7 @@
         
         !---------------------------------------------------------------
         !
-        ! ��ȡ��λ����
+        ! 获取单位向量
         PURE FUNCTION UTZVEC(vtr_) RESULT(res_)
             IMPLICIT NONE
             REAL*8, INTENT(IN) :: vtr_(:)
@@ -1353,7 +1353,7 @@
         
         !---------------------------------------------------------------
         !
-        ! �㵽����ƽ��Ĵ�ֱ����(�����ţ�����ж�)
+        ! 点到任意平面的垂直距离(带符号，叉积判断)
         FUNCTION DIST_PF_SIGN(arbitraryPoint_, defi3PoinOnPlane_) RESULT(res_)
             IMPLICIT NONE
             REAL*8 :: res_ ! return value
@@ -1365,7 +1365,7 @@
             p_xyz = defi3PoinOnPlane_(1,:)
             n_vtr = UNINML(defi3PoinOnPlane_)
             
-            ! �������ĵ㲻��ȷ��һ���棬��ô����
+            ! 如果输入的点不能确定一个面，那么报错
             IF ( ALL( DABS(n_vtr) < 1.D-12 ) ) THEN
                 WRITE(UNIT=6, FMT="(A)") "ERROR - PURE FUNCTION DIST_PF_SIGN(arbitraryPoint_, defi3PoinOnPlane_) RESULT(res_)" ! 
                 READ(UNIT=5, FMT=*)   
@@ -1378,7 +1378,7 @@
         
         !---------------------------------------------------------------
         !
-        ! ����ƽ��ĵ�λ��ʸ
+        ! 计算平面的单位法矢
         PURE FUNCTION UNINML(plane3Vertex_) RESULT(res_)
             IMPLICIT NONE
             REAL*8, INTENT(IN) :: plane3Vertex_(3,3)
@@ -1395,7 +1395,7 @@
         
         !---------------------------------------------------------------
         !
-        ! �жϸ�����һϵ�пռ���Ƿ�ȫ���غ� 
+        ! 判断给定的一系列空间点是否全部重合 
         PURE FUNCTION OVERLAP(a_) RESULT(res_)
             IMPLICIT NONE
             REAL*8, DIMENSION(:, :), INTENT(IN) :: a_
@@ -1419,14 +1419,14 @@
         
         !---------------------------------------------------------------
         !
-        ! ����ֱ��ĳһ��Ĵ���ָ��õ�ĵ�λ����
+        ! 任意直线某一点的垂足指向该点的单位向量
         PURE FUNCTION VEC_PL(arbitraryPoint_, defi2PoinOnLine_) RESULT(res_)
             IMPLICIT NONE
             REAL*8 :: res_(3) ! return value
             REAL*8, INTENT(IN) :: arbitraryPoint_(3), defi2PoinOnLine_(2,3)
             !---------------------------------------------------------------
             REAL*8 :: A(3), B(3), AB(3), C(3), D(3), AC(3)
-            REAL*8 :: vec(3)    ! ����
+            REAL*8 :: vec(3)    ! 垂足
             !---------------------------------------------------------------
             A = defi2PoinOnLine_(1,:)
             B = defi2PoinOnLine_(2,:)
@@ -1442,7 +1442,7 @@
 
         !---------------------------------------------------------------
         !
-        ! ��ȡ�ڿռ��ϵõ���ֱ�߼���̾��룬��Ӧ�ֱ�������ֱ���ϵĵ㣨2�����㣩
+        ! 获取在空间上得到两直线间最短距离，对应分别在两条直线上的点（2个垂足）
         FUNCTION FOOT_LL(lineDefiEP_1_, lineDefiEP_2_) RESULT(res_)
             IMPLICIT NONE
             REAL*8, INTENT(IN) :: lineDefiEP_1_(2,3), lineDefiEP_2_(2,3)
@@ -1471,10 +1471,10 @@
 
             d = a * e - b**2
 
-            IF ( DABS(d) < 1.0D-12 ) THEN !��ֱ��ƽ�У���ôȡ��һ���ߵ��е���Ϊ����
+            IF ( DABS(d) < 1.0D-12 ) THEN !两直线平行，那么取第一条线的中点作为垂足
                 res_(1,:) = (P1 + Q1) / 2.D0 
                 res_(2,:) = FOOT_PL(res_(1,:), lineDefiEP_2_)
-            ELSE !��ֱ�߲�ƽ��
+            ELSE !两直线不平行
                 s = (b * f - c * e) / d
                 t = (a * f - b * c) / d
                 L1_s = P1 + s * (Q1 - P1)
@@ -1488,14 +1488,14 @@
         
         !---------------------------------------------------------------
         !
-        ! �㵽����ֱ�ߵĴ���
+        ! 点到任意直线的垂足
         PURE FUNCTION FOOT_PL(arbitraryPoint_, defi2PoinOnLine_) RESULT(res_)
             IMPLICIT NONE
             REAL*8 :: res_(3) ! return value
             REAL*8, INTENT(IN) :: arbitraryPoint_(3), defi2PoinOnLine_(2,3)
             !---------------------------------------------------------------
-            REAL*8 :: P(3)   ! ���жϵĵ�
-            REAL*8 :: V(2,3)  ! ���жϵ�ֱ���ϵ���������
+            REAL*8 :: P(3)   ! 待判断的点
+            REAL*8 :: V(2,3)  ! 待判断的直线上的任意两点
             !---------------------------------------------------------------
             P = arbitraryPoint_
             V = defi2PoinOnLine_
@@ -1506,7 +1506,7 @@
         
         !---------------------------------------------------------------
         !
-        ! ���ռ���ɢ�ҵĵ㰴ʱ�����У����������㶼��ͬһ�ռ�ƽ���ڣ����������ɿ�
+        ! 将空间中散乱的点按时针排列，但必须假设点都在同一空间平面内，否则结果不可靠
         !  IN - points(:,3)
         !  OUT - ordered_points(:,3)
         !---------------------------------------------------------------
@@ -1517,32 +1517,32 @@
             INTEGER*4 :: i, j, index, num_points
             REAL*8 :: angle, min_angle
 
-            ! ���жϼ������Ƿ��غϣ��غ���ֱ���������㷨����������
+            ! 先判断几个点是否重合，重合则直接跳出该算法，无需排列
             IF ( OVERLAP(points_) ) RETURN
             
             num_points = SIZE(points_, 1)
 
-            ! ��������
+            ! 计算质心
             centroid = SUM(points_, DIM=1) / num_points
 
-            ! ����ƽ�淨����
+            ! 计算平面法向量
             v1 = points_(2, :) - points_(1, :)
             v2 = points_(3, :) - points_(1, :)
             normal = CROSS_PRODUCT_3D(v1, v2)
 
-            ! �Ե�һ������Ϊ��׼�����Ƕ����������
+            ! 以第一个点作为基准，按角度排序其余点
             ordered_points_(1, :) = points_(1, :)
             DO i = 2, num_points
                 min_angle = HUGE(angle)
                 index = -1
                 DO j = 1, num_points
-                    ! ����������ĵ�
+                    ! 跳过已排序的点
                     IF (IS_POINT_IN_ORDERED_POINTS(points_(j, :), ordered_points_)) CYCLE
                     v1 = points_(j, :) - centroid
                     v2 = ordered_points_(i - 1, :) - centroid
-                    ! CHOOSE : ��ʱ������
+                    ! CHOOSE : 逆时针排列
                     angle = ATAN2(DOT_PRODUCT(normal, CROSS_PRODUCT_3D(v2, v1)), DOT_PRODUCT(v1, v2))
-                    ! CHOOSE : ˳ʱ������
+                    ! CHOOSE : 顺时针排列
                     !angle = atan2(dot_product(normal, cross_product_for_fn_order_points(v1, v2)), dot_product(v1, v2))
                     angle = MODULO(angle + 2.0 * ACOS(-1.0), 2.0 * ACOS(-1.0))
 
@@ -1556,7 +1556,7 @@
             RETURN
             CONTAINS
                 !---------------------------------------------------------------
-                ! �����Ƿ��Ѿ��������ĵ㼯��
+                ! 检查点是否已经在排序后的点集中
                 PURE FUNCTION IS_POINT_IN_ORDERED_POINTS(point, ordered_points) RESULT(is_in)
                     REAL*8, DIMENSION(3), INTENT(IN) :: point
                     REAL*8, DIMENSION(:, :), INTENT(IN) :: ordered_points
