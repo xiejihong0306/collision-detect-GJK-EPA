@@ -37,3 +37,18 @@ add_executable(test_quickhull tests/test_quickhull.f90)
 target_link_libraries(test_quickhull PRIVATE gjkepa)
 set_target_properties(test_quickhull PROPERTIES Fortran_MODULE_DIRECTORY ${CMAKE_BINARY_DIR}/mod)
 add_test(NAME quickhull COMMAND test_quickhull)
+
+# Shared C ABI for the Python verification bench (ctypes).
+add_library(gjkepa_c SHARED src/collision/gjkepa_capi.f90)
+target_link_libraries(gjkepa_c PRIVATE gjkepa)
+if(OpenMP_Fortran_FOUND)
+    target_link_libraries(gjkepa_c PRIVATE OpenMP::OpenMP_Fortran)
+endif()
+set_target_properties(gjkepa_c PROPERTIES
+    Fortran_MODULE_DIRECTORY ${CMAKE_BINARY_DIR}/mod
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
+    ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib
+    WINDOWS_EXPORT_ALL_SYMBOLS ON
+    POSITION_INDEPENDENT_CODE ON
+)

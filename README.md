@@ -46,6 +46,18 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
+## Verification bench
+
+The only user-facing Python entry is `launcher.py`. It creates `.venv` if needed,
+builds the `gjkepa_c` shared library incrementally, then opens an interactive
+scene or a headless suite. See `bench/README.md` for keys, conventions, and
+known algorithm limits.
+
+```bash
+python launcher.py
+python launcher.py --headless --suite regression
+```
+
 The example program prints a cube-vs-rotated-cube query:
 
 ```bash
