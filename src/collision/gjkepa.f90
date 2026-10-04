@@ -21,8 +21,28 @@ module GCLIB_GJKEPA
     integer, parameter :: EPA_MAX_VERTS = 256
     integer, parameter :: EPA_MAX_FACES = 512
     integer, parameter :: EPA_MAX_EDGES = 1024
+    integer, parameter, public :: GJK_TRACE_MAX = 64
+    integer, parameter, public :: EPA_TRACE_MAX = 128
 
-    public :: GJKEPA
+    public :: GJKEPA, GJKEPA_query
+
+    ! Diagnostic-only records. Filling them must not change collision results.
+    type, public :: gjk_step_t
+        real(rk) :: dir(3) = 0.0_rk
+        real(rk) :: support(3) = 0.0_rk
+        real(rk) :: closest(3) = 0.0_rk
+        integer :: nsimp = 0
+        integer :: reason = 0
+    end type gjk_step_t
+
+    type, public :: epa_step_t
+        real(rk) :: normal(3) = 0.0_rk
+        real(rk) :: dist = 0.0_rk
+        real(rk) :: support(3) = 0.0_rk
+        integer :: nfaces = 0
+        integer :: nverts = 0
+        integer :: reason = 0
+    end type epa_step_t
 
     type :: epa_face
         integer :: v(3) = 0
@@ -47,10 +67,38 @@ contains
         real(rk), intent(out) :: collision_normal_(3)
         real(rk), intent(out) :: collision_point_(3)
         real(rk), intent(out) :: penetration_depth_
+        integer :: info, gjk_iters, epa_iters, epa_info
+
+        call GJKEPA_query(version_, TOL_FF_, p1_, p2_, collision_, colliType_, &
+                          nearest_points_, collision_normal_, collision_point_, &
+                          penetration_depth_, info, gjk_iters, epa_iters, epa_info)
+    end subroutine GJKEPA
+
+    ! Same collision results as GJKEPA, plus status / iteration counts.
+    ! info: 0 ok, 1 bad input, 2 GJK hit iter limit, 3 EPA failed to seed/expand
+    subroutine GJKEPA_query(version_, TOL_FF_, p1_, p2_, collision_, colliType_, &
+                            nearest_points_, collision_normal_, collision_point_, &
+                            penetration_depth_, info_, gjk_iters_, epa_iters_, epa_info_, &
+                            gjk_trace, n_gjk_trace, epa_trace, n_epa_trace)
+        implicit none
+        integer, intent(in) :: version_
+        real(rk), intent(in) :: TOL_FF_
+        real(rk), intent(in) :: p1_(:, :), p2_(:, :)
+        logical, intent(out) :: collision_
+        integer, intent(out) :: colliType_
+        real(rk), intent(out) :: nearest_points_(2, 3)
+        real(rk), intent(out) :: collision_normal_(3)
+        real(rk), intent(out) :: collision_point_(3)
+        real(rk), intent(out) :: penetration_depth_
+        integer, intent(out) :: info_, gjk_iters_, epa_iters_, epa_info_
+        type(gjk_step_t), optional, intent(inout) :: gjk_trace(:)
+        integer, optional, intent(out) :: n_gjk_trace
+        type(epa_step_t), optional, intent(inout) :: epa_trace(:)
+        integer, optional, intent(out) :: n_epa_trace
 
         real(rk) :: simplex(4, 3), dir(3), epa_n(3), epa_d
         integer :: nsimp, info
-        logical :: hit
+        logical :: hit, gjk_capped
 
         collision_ = .false.
         colliType_ = 0
@@ -58,13 +106,27 @@ contains
         collision_normal_ = 0.0_rk
         collision_point_ = 0.0_rk
         penetration_depth_ = 0.0_rk
+        info_ = 0
+        gjk_iters_ = 0
+        epa_iters_ = 0
+        epa_info_ = 0
+        if (present(n_gjk_trace)) n_gjk_trace = 0
+        if (present(n_epa_trace)) n_epa_trace = 0
 
-        if (size(p1_, 2) /= 3 .or. size(p2_, 2) /= 3) return
-        if (size(p1_, 1) < 1 .or. size(p2_, 1) < 1) return
+        if (size(p1_, 2) /= 3 .or. size(p2_, 2) /= 3) then
+            info_ = 1
+            return
+        end if
+        if (size(p1_, 1) < 1 .or. size(p2_, 1) < 1) then
+            info_ = 1
+            return
+        end if
 
         if (.not. sphere_envelope_hit(p1_, p2_)) return
 
-        call run_gjk(p1_, p2_, hit, simplex, nsimp, dir)
+        call run_gjk(p1_, p2_, hit, simplex, nsimp, dir, gjk_iters_, gjk_capped, &
+                     gjk_trace, n_gjk_trace)
+        if (gjk_capped) info_ = 2
         if (.not. hit) then
             if (simplex_touches_origin(simplex, nsimp, collision_normal_, penetration_depth_)) then
                 collision_ = .true.
@@ -82,10 +144,14 @@ contains
         penetration_depth_ = huge(1.0_rk)
         call refine_penetration(p1_, p2_, collision_normal_, penetration_depth_)
         if (nsimp >= 4) then
-            call run_epa(p1_, p2_, simplex, nsimp, info, epa_n, epa_d)
+            call run_epa(p1_, p2_, simplex, nsimp, info, epa_n, epa_d, epa_iters_, &
+                         epa_trace, n_epa_trace)
+            epa_info_ = info
             if (info == 0 .and. epa_d > 1.0e-9_rk .and. epa_d < penetration_depth_) then
                 penetration_depth_ = epa_d
                 collision_normal_ = epa_n
+            else if (info /= 0) then
+                info_ = 3
             end if
         end if
         if (penetration_depth_ > 1.0e8_rk) penetration_depth_ = 0.0_rk
@@ -94,7 +160,7 @@ contains
         nearest_points_ = witness_points(p1_, p2_, collision_normal_)
         collision_point_ = collision_point_from_supports(version_, p1_, p2_, collision_normal_)
         colliType_ = classify_collision(p1_, p2_, collision_normal_, TOL_FF_)
-    end subroutine GJKEPA
+    end subroutine GJKEPA_query
 
     logical function sphere_envelope_hit(p1, p2) result(hit)
         real(rk), intent(in) :: p1(:, :), p2(:, :)
@@ -117,34 +183,47 @@ contains
     !----------------------------------------------------------------
     ! GJK
     !----------------------------------------------------------------
-    subroutine run_gjk(p1, p2, hit, simplex, nsimp, dir)
+    subroutine run_gjk(p1, p2, hit, simplex, nsimp, dir, niter, capped, trace, ntrace)
         real(rk), intent(in) :: p1(:, :), p2(:, :)
         logical, intent(out) :: hit
         real(rk), intent(out) :: simplex(4, 3)
         integer, intent(out) :: nsimp
         real(rk), intent(out) :: dir(3)
+        integer, intent(out) :: niter
+        logical, intent(out) :: capped
+        type(gjk_step_t), optional, intent(inout) :: trace(:)
+        integer, optional, intent(out) :: ntrace
         real(rk) :: w(3), c1(3), c2(3), v(3), vn2
-        integer :: iter
+        integer :: iter, reason
 
         hit = .false.
+        capped = .false.
+        niter = 0
         nsimp = 0
         simplex = 0.0_rk
+        if (present(ntrace)) ntrace = 0
         c1 = polygon_centroid(p1)
         c2 = polygon_centroid(p2)
         dir = c1 - c2
         if (norm2(dir) < GEOM_EPS) dir = [1.0_rk, 0.0_rk, 0.0_rk]
 
         do iter = 1, GJK_MAX_ITER
+            niter = iter
             w = minkowski_support(p1, p2, dir)
+            reason = 1
             ! If the support plane does not pass the origin, bodies are separate.
             if (dot_product(w, dir) < -1.0e-9_rk) then
                 hit = .false.
+                reason = 2
+                call record_gjk_step(trace, ntrace, dir, w, w, nsimp, reason)
                 return
             end if
             if (nsimp >= 1) then
                 if (already_vertex(simplex, nsimp, w)) then
                     call closest_point_on_simplex(simplex, nsimp, v)
                     hit = (norm2(v) <= 1.0e-6_rk)
+                    reason = 3
+                    call record_gjk_step(trace, ntrace, dir, w, v, nsimp, reason)
                     return
                 end if
             end if
@@ -152,19 +231,43 @@ contains
             simplex(nsimp, :) = w
             if (nsimp == 4 .and. origin_in_tetra(simplex)) then
                 hit = .true.
+                reason = 4
+                call record_gjk_step(trace, ntrace, dir, w, [0.0_rk, 0.0_rk, 0.0_rk], nsimp, reason)
                 return
             end if
             call reduce_simplex_toward_origin(simplex, nsimp, v)
             vn2 = dot_product(v, v)
             if (vn2 <= 1.0e-12_rk) then
                 hit = .true.
+                reason = 5
+                call record_gjk_step(trace, ntrace, dir, w, v, nsimp, reason)
                 return
             end if
+            call record_gjk_step(trace, ntrace, dir, w, v, nsimp, reason)
             dir = -v
         end do
         call closest_point_on_simplex(simplex, nsimp, v)
         hit = (norm2(v) <= 1.0e-6_rk)
+        capped = .true.
+        call record_gjk_step(trace, ntrace, dir, w, v, nsimp, 6)
     end subroutine run_gjk
+
+    subroutine record_gjk_step(trace, ntrace, dir, support, closest, nsimp, reason)
+        type(gjk_step_t), optional, intent(inout) :: trace(:)
+        integer, optional, intent(inout) :: ntrace
+        real(rk), intent(in) :: dir(3), support(3), closest(3)
+        integer, intent(in) :: nsimp, reason
+        integer :: k
+        if (.not. present(trace) .or. .not. present(ntrace)) return
+        if (ntrace >= size(trace)) return
+        ntrace = ntrace + 1
+        k = ntrace
+        trace(k)%dir = dir
+        trace(k)%support = support
+        trace(k)%closest = closest
+        trace(k)%nsimp = nsimp
+        trace(k)%reason = reason
+    end subroutine record_gjk_step
 
     subroutine reduce_simplex_toward_origin(s, n, closest)
         real(rk), intent(inout) :: s(4, 3)
@@ -295,12 +398,15 @@ contains
     !----------------------------------------------------------------
     ! EPA — horizon expansion
     !----------------------------------------------------------------
-    subroutine run_epa(p1, p2, simplex, nsimp, info, normal, depth)
+    subroutine run_epa(p1, p2, simplex, nsimp, info, normal, depth, niter, trace, ntrace)
         real(rk), intent(in) :: p1(:, :), p2(:, :)
         real(rk), intent(in) :: simplex(4, 3)
         integer, intent(in) :: nsimp
         integer, intent(out) :: info
         real(rk), intent(out) :: normal(3), depth
+        integer, intent(out) :: niter
+        type(epa_step_t), optional, intent(inout) :: trace(:)
+        integer, optional, intent(out) :: ntrace
 
         real(rk) :: verts(EPA_MAX_VERTS, 3)
         type(epa_face) :: faces(EPA_MAX_FACES)
@@ -309,8 +415,10 @@ contains
         logical :: expanded
 
         info = 0
+        niter = 0
         normal = 0.0_rk
         depth = 0.0_rk
+        if (present(ntrace)) ntrace = 0
 
         call seed_polytope(p1, p2, simplex, nsimp, verts, nv, faces, nf, info)
         if (info /= 0 .or. nf < 4) then
@@ -318,30 +426,37 @@ contains
                 normal = unit3(plane_normal(simplex(1:3, :)))
                 depth = abs(dot_product(normal, simplex(1, :)))
                 info = 0
+                call record_epa_step(trace, ntrace, normal, depth, simplex(1, :), nf, nv, 2)
             else
                 info = 1
+                call record_epa_step(trace, ntrace, normal, depth, [0.0_rk, 0.0_rk, 0.0_rk], nf, nv, 5)
             end if
             return
         end if
 
         do iter = 1, EPA_MAX_ITER
+            niter = iter
             imin = closest_alive_face(faces, nf)
             if (imin < 1) then
                 info = 2
+                call record_epa_step(trace, ntrace, normal, depth, [0.0_rk, 0.0_rk, 0.0_rk], nf, nv, 5)
                 return
             end if
             w = minkowski_support(p1, p2, faces(imin)%n)
             if (dot_product(w, faces(imin)%n) - faces(imin)%dist < 1.0e-6_rk) then
                 normal = faces(imin)%n
                 depth = max(0.0_rk, faces(imin)%dist)
+                call record_epa_step(trace, ntrace, normal, depth, w, nf, nv, 2)
                 return
             end if
             call expand_polytope(w, verts, nv, faces, nf, expanded)
             if (.not. expanded) then
                 normal = faces(imin)%n
                 depth = max(0.0_rk, faces(imin)%dist)
+                call record_epa_step(trace, ntrace, normal, depth, w, nf, nv, 3)
                 return
             end if
+            call record_epa_step(trace, ntrace, faces(imin)%n, faces(imin)%dist, w, nf, nv, 1)
         end do
 
         imin = closest_alive_face(faces, nf)
@@ -349,10 +464,30 @@ contains
             normal = faces(imin)%n
             depth = max(0.0_rk, faces(imin)%dist)
             info = 0
+            call record_epa_step(trace, ntrace, normal, depth, [0.0_rk, 0.0_rk, 0.0_rk], nf, nv, 4)
         else
             info = 3
+            call record_epa_step(trace, ntrace, normal, depth, [0.0_rk, 0.0_rk, 0.0_rk], nf, nv, 5)
         end if
     end subroutine run_epa
+
+    subroutine record_epa_step(trace, ntrace, nml, dist, support, nfaces, nverts, reason)
+        type(epa_step_t), optional, intent(inout) :: trace(:)
+        integer, optional, intent(inout) :: ntrace
+        real(rk), intent(in) :: nml(3), dist, support(3)
+        integer, intent(in) :: nfaces, nverts, reason
+        integer :: k
+        if (.not. present(trace) .or. .not. present(ntrace)) return
+        if (ntrace >= size(trace)) return
+        ntrace = ntrace + 1
+        k = ntrace
+        trace(k)%normal = nml
+        trace(k)%dist = dist
+        trace(k)%support = support
+        trace(k)%nfaces = nfaces
+        trace(k)%nverts = nverts
+        trace(k)%reason = reason
+    end subroutine record_epa_step
 
     subroutine seed_polytope(p1, p2, simplex, nsimp, verts, nv, faces, nf, info)
         real(rk), intent(in) :: p1(:, :), p2(:, :), simplex(4, 3)

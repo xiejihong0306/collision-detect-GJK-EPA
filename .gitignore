@@ -50,3 +50,10 @@ compile_commands.json
 .idea/
 *.user
 *.suo
+
+# Python bench
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+artifacts/
